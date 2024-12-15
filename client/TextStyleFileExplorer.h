@@ -30,13 +30,17 @@ private:
 
     void moveSelection(int step);
     void handleEnter();
-    void handleCommand();
     void handleDelete();
     void handleCreateFolder();
     void handleCreateFile();
     void handleCopy();
     void handlePaste();
+    void handleRefreshDirectory();
     void onServerResponse();
+    void handleShowProcessList();
+    void handleRunProcess();
+    void handleKillProcess();
+    void handleChangePermission();
 };
 
 #endif // TEXT_STYLE_FILE_EXPLORER_H

@@ -16,12 +16,11 @@
 TextStyleFileExplorer::TextStyleFileExplorer(QWidget* parent) : QWidget(parent) {
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
-    currentPathLabel = new QLabel("/home/user", this);
+    currentPathLabel = new QLabel("/", this);
     currentPathLabel->setAlignment(Qt::AlignCenter);
     currentPathLabel->setStyleSheet("font-weight: bold;");
 
     fileList = new QListWidget(this);
-    fileList->addItems({"file1", "file2", "dir1", "dir2"});
     fileList->setFocusPolicy(Qt::StrongFocus);
 
     QPalette palette = fileList->palette();
@@ -29,21 +28,12 @@ TextStyleFileExplorer::TextStyleFileExplorer(QWidget* parent) : QWidget(parent) 
     palette.setColor(QPalette::Text, Qt::white);
     fileList->setPalette(palette);
 
-    QHBoxLayout* commandLayout = new QHBoxLayout();
-    QLabel* commandLabel = new QLabel("Command: ", this);
-    commandInput = new QLineEdit(this);
-
-    commandLayout->addWidget(commandLabel);
-    commandLayout->addWidget(commandInput);
-
     mainLayout->addWidget(currentPathLabel);
     mainLayout->addWidget(fileList);
-    mainLayout->addLayout(commandLayout);
 
     setWindowTitle("Text-Style File Explorer");
     setFixedSize(600, 400);
 
-    commandInput->installEventFilter(this);
     fileList->installEventFilter(this);
 
     // Setup TCP socket
@@ -59,14 +49,19 @@ TextStyleFileExplorer::TextStyleFileExplorer(QWidget* parent) : QWidget(parent) 
 }
 
 void TextStyleFileExplorer::init() {
+    QFont fixedFont("Courier New"); // 고정 폭 글꼴 지정
+    fixedFont.setStyleHint(QFont::TypeWriter); // 고정 폭 힌트 설정
+    fileList->setFont(fixedFont); // QListWidget에 글꼴 적용
+
     if (socket->write("cd /") == -1) {
         qDebug() << "Failed to send cd command:" << socket->errorString();
     } else if (!socket->waitForReadyRead(3000)) {
-        qDebug() << "Timeout while sending cd command.";
+        qDebug() << "Timeout while sending ls command.";
     }
-
-    if (socket->write("pwd") == -1) {
-        qDebug() << "Failed to send pwd command:" << socket->errorString();
+    if (socket->write("ls") == -1) {
+        qDebug() << "Failed to send ls command:" << socket->errorString();
+    } else if (!socket->waitForReadyRead(3000)) {
+        qDebug() << "Timeout while sending ls command.";
     }
     qDebug() << "Sent to server: pwd";
 }
@@ -91,22 +86,31 @@ bool TextStyleFileExplorer::eventFilter(QObject* obj, QEvent* event) {
             handleEnter();
             return true;
         } else if (keyEvent->key() == Qt::Key_Delete) {
-            handleDelete();
+            handleDelete(); // rm
             return true;
         } else if (keyEvent->key() == Qt::Key_F7) {
-            handleCreateFolder();
+            handleCreateFolder(); // mkdir
             return true;
         } else if (keyEvent->key() == Qt::Key_F8) {
-            handleCreateFile();
+            handleCreateFile(); // touch
+            return true;
+        } else if (keyEvent->key() == Qt::Key_Escape) { // ESC 키 처리
+            handleRefreshDirectory(); // ls 명령 실행
+            return true;
+        } else if (keyEvent->key() == Qt::Key_F2) { // F2 키 처리
+            handleShowProcessList(); // ps
+            return true;
+        } else if (keyEvent->key() == Qt::Key_F4) { // F4 키 처리
+            handleRunProcess(); // exec
+            return true;
+        } else if (keyEvent->key() == Qt::Key_End) { // End 키 처리
+            handleKillProcess(); // kill
+            return true;
+        } else if (keyEvent->key() == Qt::Key_F6) { // F6 키 처리
+            handleChangePermission(); // chmod
             return true;
         }
-    } else if (obj == commandInput && event->type() == QEvent::KeyPress) {
-        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
-        if (keyEvent->key() == Qt::Key_Return) {
-            handleCommand();
-            return true;
-        }
-    }
+    } 
     return QWidget::eventFilter(obj, event);
 }
 
@@ -132,40 +136,29 @@ void TextStyleFileExplorer::handleEnter() {
     if (selectedItem.contains("DIR")) { // 폴더인지 확인
         // cd 명령 전송
         QString command = "cd " + folderName;
-        qDebug() << command.toUtf8();
         if (socket->write(command.toUtf8()) == -1) {
             qDebug() << "Failed to send cd command:" << socket->errorString();
             return;
         } else if (!socket->waitForReadyRead(3000)) {
-            qDebug() << "Timeout while sending cd command.";
-            return;
+            qDebug() << "Timeout while sending ls command.";
         }
         qDebug() << "Sent to server: cd" << folderName;
 
-        // 현재 디렉토리 요청 (pwd)
-        if (socket->write("pwd") == -1) {
-            qDebug() << "Failed to send pwd command:" << socket->errorString();
-            return;
+        if (socket->write("ls") == -1) {
+            qDebug() << "Failed to send ls command:" << socket->errorString();
+        } else if (!socket->waitForReadyRead(3000)) {
+            qDebug() << "Timeout while sending ls command.";
         }
-        qDebug() << "Sent to server: pwd";
     } else {
-        qDebug() << "Selected item is not a directory, cannot navigate.";
-    }
-}
-
-void TextStyleFileExplorer::handleCommand() {
-    QString command = commandInput->text();
-    if (!command.isEmpty() && socket->state() == QTcpSocket::ConnectedState) {
-        socket->write(command.toUtf8());
-        qDebug() << "Sent to server:" << command;
-        if (!socket->waitForReadyRead(3000)) {
-            qDebug() << "Timeout while sending command.";
+        QString command = "cat " + folderName; // 파일 내용 읽기 명령 (cat 사용)
+        qDebug() << "Sending to server: " << command;
+        if (socket->write(command.toUtf8()) == -1) {
+            qDebug() << "Failed to send file read command:" << socket->errorString();
             return;
+        } else if (!socket->waitForReadyRead(3000)) {
+            qDebug() << "Timeout while sending cat command.";
         }
-        socket->write("pwd");
-        qDebug() << "Sent to server:" << "pwd";
     }
-    commandInput->clear();
 }
 
 void TextStyleFileExplorer::onServerResponse() {
@@ -177,6 +170,64 @@ void TextStyleFileExplorer::onServerResponse() {
         QString currentPath = QString(response).trimmed(); // 개행 및 공백 제거
         currentPathLabel->setText(currentPath);
         qDebug() << "Updated current path:" << currentPath;
+    } else if (response.startsWith("FILE_CONTENT_START:")) {
+        QString fileName = QString(response).section(':', 1, 1).trimmed();
+        qDebug() << "Receiving content for file:" << fileName;
+
+        // Extract and process file content
+        QString fileContent = QString(response).section('\n', 1).trimmed();
+        qDebug() << "File content:" << fileContent;
+
+        fileList->clear();
+        QStringList fileLines = QString(fileContent).split('\n', Qt::SkipEmptyParts);
+        for (const QString& line : fileLines) {
+            fileList->addItem(QString(line));
+        }
+        fileList->addItem(QString("--- Press ESC to go back ---")); // 안내 메시지 추가
+
+        fileList->setStyleSheet("");
+        fileList->update();
+    } else if (response.startsWith("error")) {
+        ;
+    } else if (response.startsWith("PROCESS_LIST_START")) {
+        // 프로세스 목록 처리
+        QString processList = QString(response).section('\n', 1).trimmed(); // 첫 줄 이후 데이터
+        qDebug() << "Process list received:\n" << processList;
+
+        // 프로세스 목록을 fileList에 출력
+        fileList->clear();
+
+        // 헤더 추가
+        QString header = QString("%1 %2 %3")
+                            .arg("PID", -8)   // 왼쪽 정렬, 8자리
+                            .arg("PPID", -8)  // 왼쪽 정렬, 8자리
+                            .arg("CMD");
+        fileList->addItem(header);
+        fileList->addItem(QString("=").repeated(header.length())); // 구분선 추가
+
+        // 프로세스 목록 파싱 및 출력
+        QStringList processLines = processList.split('\n', Qt::SkipEmptyParts);
+        for (const QString& line : processLines) {
+            QStringList fields = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+            if (fields.size() >= 3) {
+                QString pid = fields[0];
+                QString ppid = fields[1];
+                QString cmd = fields.mid(2).join(" "); // 나머지 필드를 CMD로 처리
+
+                // 정렬된 포맷으로 출력
+                QString formattedLine = QString("%1 %2 %3")
+                                            .arg(pid, -8)   // PID, 왼쪽 정렬 8자리
+                                            .arg(ppid, -8)  // PPID, 왼쪽 정렬 8자리
+                                            .arg(cmd);
+                fileList->addItem(formattedLine);
+            }
+        }
+
+        // 안내 메시지 추가
+        fileList->addItem("--- Press ESC to go back ---");
+
+        fileList->setStyleSheet("");
+        fileList->update();
     } else {
         // 파일/폴더 리스트 처리
         QStringList fileListData = QString(response).split('\n', Qt::SkipEmptyParts);
@@ -251,10 +302,11 @@ void TextStyleFileExplorer::handleDelete() {
         qDebug() << "Sent to server:" << command;
     }
 
-    // // 삭제 후 리스트 업데이트 요청
-    // if (socket->write("ls\n") == -1) {
-    //     qDebug() << "Failed to request updated file list:" << socket->errorString();
-    // }
+    if (socket->write("ls") == -1) {
+        qDebug() << "Failed to send ls command:" << socket->errorString();
+    } else if (!socket->waitForReadyRead(3000)) {
+        qDebug() << "Timeout while sending ls command.";
+    }
 }
 
 void TextStyleFileExplorer::handleCreateFolder() {
@@ -286,9 +338,15 @@ void TextStyleFileExplorer::handleCreateFolder() {
             QString command = "mkdir " + folderName + "\n";
             if (socket->write(command.toUtf8()) == -1) {
                 qDebug() << "Failed to send mkdir command:" << socket->errorString();
-            } else if (!socket->waitForReadyRead(3000)) {
+            } else if (!socket->waitForBytesWritten(3000)) {
                 qDebug() << "Timeout while sending cd command.";
                 return;
+            }
+
+            if (socket->write("ls") == -1) {
+                qDebug() << "Failed to send ls command:" << socket->errorString();
+            } else if (!socket->waitForReadyRead(3000)) {
+                qDebug() << "Timeout while sending ls command.";
             }
         }
     });
@@ -323,9 +381,15 @@ void TextStyleFileExplorer::handleCreateFile() {
             QString command = "touch " + folderName + "\n";
             if (socket->write(command.toUtf8()) == -1) {
                 qDebug() << "Failed to send mkdir command:" << socket->errorString();
-            } else if (!socket->waitForReadyRead(3000)) {
+            } else if (!socket->waitForBytesWritten(3000)) {
                 qDebug() << "Timeout while sending cd command.";
                 return;
+            }
+
+            if (socket->write("ls") == -1) {
+                qDebug() << "Failed to send ls command:" << socket->errorString();
+            } else if (!socket->waitForReadyRead(3000)) {
+                qDebug() << "Timeout while sending ls command.";
             }
         }
     });
@@ -378,9 +442,182 @@ void TextStyleFileExplorer::handlePaste() {
     // 서버에 cp 명령 전송
     if (socket->write(command.toUtf8()) == -1) {
         qDebug() << "Failed to send cp command:" << socket->errorString();
-    } else if (!socket->waitForReadyRead(3000)) {
-        qDebug() << "Timeout while sending cp command.";
+    } else if (!socket->waitForBytesWritten(3000)) {
+        qDebug() << "Timeout while sending ls command.";
     } else {
         qDebug() << "Sent to server:" << command;
     }
+
+    if (socket->write("ls") == -1) {
+        qDebug() << "Failed to send ls command:" << socket->errorString();
+    } else if (!socket->waitForReadyRead(3000)) {
+        qDebug() << "Timeout while sending ls command.";
+    }
+}
+
+void TextStyleFileExplorer::handleRefreshDirectory() {
+    // 서버에 ls 명령 전송
+    if (socket->write("ls\n") == -1) {
+        qDebug() << "Failed to send ls command:" << socket->errorString();
+        return;
+    }
+    if (!socket->waitForBytesWritten(3000)) {
+        qDebug() << "Timeout while sending ls command.";
+        return;
+    }
+    qDebug() << "Sent to server: ls";
+}
+
+void TextStyleFileExplorer::handleShowProcessList() {
+    // 서버에 ps 명령 전송
+    if (socket->write("ps\n") == -1) {
+        qDebug() << "Failed to send ps command:" << socket->errorString();
+        return;
+    }
+    if (!socket->waitForBytesWritten(3000)) {
+        qDebug() << "Timeout while sending ps command.";
+        return;
+    }
+    qDebug() << "Sent to server: ps";
+}
+
+void TextStyleFileExplorer::handleRunProcess() {
+    // 선택된 파일 가져오기
+    QListWidgetItem* selectedItem = fileList->currentItem();
+    if (!selectedItem) {
+        qDebug() << "No file selected to run.";
+        return;
+    }
+
+    // 선택된 항목에서 파일 이름 추출
+    QString fileName = selectedItem->text().split(QRegExp("\\s+")).last(); // 마지막 필드가 파일 이름
+    fileName.remove('\"'); // 따옴표 제거
+
+    if (fileName.isEmpty()) {
+        qDebug() << "Invalid file name.";
+        return;
+    }
+
+    // 서버에 exec 명령 전송
+    QString command = QString("exec %1").arg(fileName);
+    if (socket->write(command.toUtf8()) == -1) {
+        qDebug() << "Failed to send exec command:" << socket->errorString();
+        return;
+    }
+
+    if (!socket->waitForBytesWritten(3000)) {
+        qDebug() << "Timeout while sending exec command.";
+        return;
+    }
+
+    qDebug() << "Sent to server: exec" << fileName;
+}
+
+void TextStyleFileExplorer::handleKillProcess() {
+    // 현재 선택된 항목 가져오기
+    QListWidgetItem* selectedItem = fileList->currentItem();
+    if (!selectedItem) {
+        qDebug() << "No process selected to kill.";
+        return;
+    }
+
+    // PID 추출
+    QStringList fields = selectedItem->text().split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+    if (fields.size() >= 1) {
+        QString pid = fields[0]; // 첫 번째 필드는 PID
+
+        // 서버에 kill 명령 전송
+        QString command = QString("kill %1\n").arg(pid);
+        if (socket->write(command.toUtf8()) == -1) {
+            qDebug() << "Failed to send kill command:" << socket->errorString();
+            return;
+        }
+        if (!socket->waitForBytesWritten(3000)) {
+            qDebug() << "Timeout while sending kill command.";
+            return;
+        }
+        qDebug() << "Sent to server: kill" << pid;
+
+        if (socket->write("ps\n") == -1) {
+        qDebug() << "Failed to send ps command:" << socket->errorString();
+        return;
+        }
+        if (!socket->waitForBytesWritten(3000)) {
+            qDebug() << "Timeout while sending ps command.";
+            return;
+        }
+        qDebug() << "Sent to server: ps";
+       
+    } else {
+        qDebug() << "Invalid process entry format.";
+    }
+}
+
+void TextStyleFileExplorer::handleChangePermission() {
+    // 기존 연결 해제
+    disconnect(fileList->itemDelegate(), &QAbstractItemDelegate::commitData, this, nullptr);
+    // 현재 선택된 파일/폴더 가져오기
+    QListWidgetItem* selectedItem = fileList->currentItem();
+    if (!selectedItem) {
+        qDebug() << "No item selected to change permission.";
+        return;
+    }
+
+    // 선택된 항목에서 파일/폴더 이름 추출
+    QString itemName = selectedItem->text().split(QRegExp("\\s+")).last(); // 마지막 필드가 파일 이름
+    itemName.remove('\"'); // 따옴표 제거
+
+    if (itemName.isEmpty()) {
+        qDebug() << "Invalid item name.";
+        return;
+    }
+
+    // 새 편집 가능한 아이템 생성
+    QListWidgetItem* editItem = new QListWidgetItem("Enter new permissions (e.g., 777)", fileList);
+    editItem->setFlags(editItem->flags() | Qt::ItemIsEditable); // 편집 가능 플래그 설정
+    fileList->addItem(editItem);
+
+    // 새 항목을 선택하고 편집 상태로 전환
+    fileList->setCurrentItem(editItem);
+    fileList->editItem(editItem);
+
+    // 사용자 입력 완료 후 처리
+    connect(fileList->itemDelegate(), &QAbstractItemDelegate::commitData, this, [=](QWidget* editor) {
+        QLineEdit* lineEdit = qobject_cast<QLineEdit*>(editor);
+        if (lineEdit) {
+            QString permission = lineEdit->text().trimmed();
+
+            // 유효한 권한 값인지 확인 (예: 777)
+            QRegExp regex("^[0-7]{3}$");
+            if (!regex.exactMatch(permission)) {
+                fileList->removeItemWidget(editItem);
+                delete editItem;
+                return;
+            }
+
+            // 서버에 chmod 명령 전송
+            QString command = QString("chmod %1 %2\n").arg(permission).arg(itemName);
+            if (socket->write(command.toUtf8()) == -1) {
+                qDebug() << "Failed to send chmod command:" << socket->errorString();
+                return;
+            }
+            if (!socket->waitForBytesWritten(3000)) {
+                qDebug() << "Timeout while sending chmod command.";
+                return;
+            }
+
+            qDebug() << "Sent to server: chmod" << permission << itemName;
+
+            if (socket->write("ls") == -1) {
+                qDebug() << "Failed to send chmod command:" << socket->errorString();
+                return;
+            }
+            if (!socket->waitForReadyRead(3000)) {
+                qDebug() << "Timeout while sending chmod command.";
+                return;
+            }
+        }
+        fileList->removeItemWidget(editItem);
+        delete editItem;
+    });
 }

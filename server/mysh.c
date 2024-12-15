@@ -43,6 +43,7 @@ DECLARE_CMDFUNC(cp);
 DECLARE_CMDFUNC(ps);
 DECLARE_CMDFUNC(kill);
 DECLARE_CMDFUNC(quit);
+DECLARE_CMDFUNC(exec);
 
 /* Command List */
 static cmd_t cmd_list[] = {
@@ -61,6 +62,7 @@ static cmd_t cmd_list[] = {
     {"ps",      cmd_ps,      NULL,        "show process status"},
     {"kill",    cmd_kill,    usage_kill,  "terminate process"},
     {"quit",    cmd_quit,    NULL,        "terminate shell"},
+    {"exec",    cmd_exec,    NULL,        ""},
 };
 
 const int command_num = sizeof(cmd_list) / sizeof(cmd_t);
@@ -187,11 +189,6 @@ char* execute(char* command) {
             printf("no command function\n");
         }
     }
-
-    if (getcwd(current_dir, MAX_CMDLINE_SIZE) == NULL) {
-        perror("getcwd");
-        return "err";
-    }
 }
 
 int cmd_help(int argc, char **argv)
@@ -291,6 +288,7 @@ int cmd_cd(int argc, char **argv)
 {
     int  ret = 0;
     char rpath[128];
+    char response[1024] = {0};
 
     if (argc == 2) {
         get_realpath(argv[1], rpath);
@@ -301,6 +299,18 @@ int cmd_cd(int argc, char **argv)
     } else {
         ret = -2;
     }
+
+    if (getcwd(current_dir, MAX_CMDLINE_SIZE) == NULL) {
+        perror("getcwd");
+        return "err";
+    }
+
+    if (strlen(current_dir) == strlen(chroot_path)) {
+        response[0] = '/'; // for root path
+    } else {
+        sprintf(response, "%s", current_dir + strlen(chroot_path));
+    }
+    send(client_fd, response, strlen(response), 0);
 
     return (ret);
 }
@@ -432,7 +442,7 @@ int cmd_ls(int argc, char **argv)
     }
 
     closedir(dp);
-
+    send_info();
 out:
     return (ret);
 }
@@ -617,8 +627,8 @@ int cmd_cat(int argc, char **argv)
     int ret = 0;
     char rpath[128];
     FILE *fp;
-    char buf[256];
-    size_t nread;
+    char *fileContent = NULL;
+    size_t fileSize = 0;
 
     if (argc != 2) {
         ret = -2; // syntax error
@@ -626,68 +636,61 @@ int cmd_cat(int argc, char **argv)
     }
 
     get_realpath(argv[1], rpath);
-    
+
+    // 파일 열기
     fp = fopen(rpath, "r");
     if (fp == NULL) {
         perror(argv[0]);
-        ret = -1;
+        ret = -1; // 파일 열기 실패
+        send(client_fd, "error", 5, 0);
         goto out;
     }
 
-    while ((nread = fread(buf, 1, sizeof(buf), fp)) > 0) {
-        fwrite(buf, 1, nread, stdout);
+    // 파일 크기 확인
+    fseek(fp, 0, SEEK_END);
+    fileSize = ftell(fp);
+    rewind(fp);
+
+    // 파일 내용을 메모리에 읽기
+    fileContent = (char *)malloc(fileSize + 1); // 파일 크기 + NULL
+    if (fileContent == NULL) {
+        perror("Memory allocation failed");
+        ret = -1;
+        fclose(fp);
+        goto out;
+    }
+    fread(fileContent, 1, fileSize, fp);
+    fileContent[fileSize] = '\0'; // NULL-terminate
+    fclose(fp);
+
+    // FILE_CONTENT_START 헤더 생성
+    char header[256];
+    snprintf(header, sizeof(header), "FILE_CONTENT_START:%s\n", rpath + strlen(chroot_path));
+
+    // 헤더와 파일 내용 결합
+    size_t totalSize = strlen(header) + fileSize;
+    char *response = (char *)malloc(totalSize + 1); // 총 크기 + NULL
+    if (response == NULL) {
+        perror("Memory allocation failed");
+        free(fileContent);
+        ret = -1;
+        goto out;
+    }
+    snprintf(response, totalSize + 1, "%s%s", header, fileContent);
+
+    // 클라이언트로 전송
+    if (send(client_fd, response, totalSize, 0) == -1) {
+        perror("Error sending file content");
+        ret = -1;
     }
 
-    fclose(fp);
-    printf("\n");
+    // 메모리 해제
+    free(fileContent);
+    free(response);
 
 out:
     return ret;
 }
-
-// int cmd_cp(int argc, char **argv)
-// {
-//     int ret = 0;
-//     char rpath1[128];
-//     char rpath2[128];
-//     FILE *src, *dst;
-//     char buf[256];
-//     size_t nread;
-
-//     if (argc != 3) {
-//         ret = -2; // syntax error
-//         goto out;
-//     }
-
-//     get_realpath(argv[1], rpath1);
-//     get_realpath(argv[2], rpath2);
-
-//     src = fopen(rpath1, "rb");
-//     if (src == NULL) {
-//         perror(argv[0]);
-//         ret = -1;
-//         goto out;
-//     }
-
-//     dst = fopen(rpath2, "wb");
-//     if (dst == NULL) {
-//         perror(argv[0]);
-//         fclose(src);
-//         ret = -1;
-//         goto out;
-//     }
-
-//     while ((nread = fread(buf, 1, sizeof(buf), src)) > 0) {
-//         fwrite(buf, 1, nread, dst);
-//     }
-
-//     fclose(src);
-//     fclose(dst);
-//     printf("file copied: %s -> %s\n", argv[1], argv[2]);
-
-// out:
-//     return ret;
-// }
 
 int cmd_cp(int argc, char **argv)
 {
@@ -794,38 +797,104 @@ int cmd_ps(int argc, char **argv)
     struct dirent *entry;
     char path[256];
     char cmdline[256];
+    char buffer[4096];     // 임시 데이터 저장 버퍼
+    char sendBuffer[65536]; // 클라이언트로 보낼 전체 데이터 저장 버퍼
+    size_t sendBufferLen = 0;
     FILE *fp;
-    
-    printf("%5s %5s %s\n", "PID", "PPID", "CMD");
-    
+
+    // 시작 문자열 추가
+    const char *header = "PROCESS_LIST_START\n";
+    size_t headerLen = strlen(header);
+    memcpy(sendBuffer, header, headerLen);
+    sendBufferLen += headerLen;
+
     dir = opendir("/proc");
     if (!dir) {
         perror("opendir");
         return -1;
     }
-    
+
     while ((entry = readdir(dir)) != NULL) {
         // PID 디렉토리만 처리 (숫자로 된 이름)
         if (entry->d_type == DT_DIR && entry->d_name[0] >= '0' && entry->d_name[0] <= '9') {
             int pid = atoi(entry->d_name);
             int ppid = 0;
-            
+
             // /proc/[pid]/stat 읽기
             snprintf(path, sizeof(path), "/proc/%d/stat", pid);
             fp = fopen(path, "r");
             if (fp) {
                 fscanf(fp, "%*d %s %*c %d", cmdline, &ppid);
                 fclose(fp);
-                
+
                 // 대괄호 제거
-                cmdline[strlen(cmdline)-1] = '\0';
-                printf("%5d %5d %s\n", pid, ppid, cmdline+1);
+                cmdline[strlen(cmdline) - 1] = '\0';
+
+                // 프로세스 정보를 임시 버퍼에 저장
+                int len = snprintf(buffer, sizeof(buffer), "%5d %5d %s\n", pid, ppid, cmdline + 1);
+
+                // 임시 버퍼 내용을 클라이언트로 보낼 버퍼에 추가
+                if (sendBufferLen + len < sizeof(sendBuffer)) {
+                    memcpy(sendBuffer + sendBufferLen, buffer, len);
+                    sendBufferLen += len;
+                } else {
+                    fprintf(stderr, "Buffer overflow: too much process data\n");
+                    closedir(dir);
+                    return -1;
+                }
             }
         }
     }
     closedir(dir);
+
+    // 클라이언트로 전송
+    if (send(client_fd, sendBuffer, sendBufferLen, 0) < 0) {
+        perror("send");
+        return -1;
+    }
+
     return 0;
 }
+
+
+// int cmd_ps(int argc, char **argv)
+// {
+//     DIR *dir;
+//     struct dirent *entry;
+//     char path[256];
+//     char cmdline[256];
+//     FILE *fp;
+    
+//     printf("%5s %5s %s\n", "PID", "PPID", "CMD");
+    
+//     dir = opendir("/proc");
+//     if (!dir) {
+//         perror("opendir");
+//         return -1;
+//     }
+    
+//     while ((entry = readdir(dir)) != NULL) {
+//         // PID 디렉토리만 처리 (숫자로 된 이름)
+//         if (entry->d_type == DT_DIR && entry->d_name[0] >= '0' && entry->d_name[0] <= '9') {
+//             int pid = atoi(entry->d_name);
+//             int ppid = 0;
+            
+//             // /proc/[pid]/stat 읽기
+//             snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+//             fp = fopen(path, "r");
+//             if (fp) {
+//                 fscanf(fp, "%*d %s %*c %d", cmdline, &ppid);
+//                 fclose(fp);
+                
+//                 // 대괄호 제거
+//                 cmdline[strlen(cmdline)-1] = '\0';
+//                 printf("%5d %5d %s\n", pid, ppid, cmdline+1);
+//             }
+//         }
+//     }
+//     closedir(dir);
+//     return 0;
+// }
 
 int cmd_kill(int argc, char **argv)
 {
@@ -971,4 +1040,57 @@ void send_info()
     if (send(client_fd, sendBuffer, sendBufferLen, 0) < 0) {
         perror("send");
     }
+}
+
+int cmd_exec(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: exec <command> [args...]\n");
+        return -2; // Syntax error
+    }
+
+    pid_t pid;
+    int status;
+    char rpath[256]; // 명령어의 절대 경로 저장
+
+    // get_realpath로 명령어 경로 확인
+    get_realpath(argv[1], rpath);
+    if (access(rpath, X_OK) != 0) {
+        fprintf(stderr, "Error: %s is not executable or does not exist.\n", rpath);
+        return -1;
+    }
+
+    // 자식 프로세스 생성
+    pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        return -1; // Fork 실패
+    }
+
+    if (pid == 0) {
+        // 자식 프로세스: 명령 실행
+        char *exec_args[argc];
+        exec_args[0] = rpath; // 절대 경로로 설정
+        for (int i = 2; i < argc; i++) {
+            exec_args[i - 1] = argv[i]; // 나머지 인자 복사
+        }
+        exec_args[argc - 1] = NULL; // execvp에 전달할 NULL 종료
+
+        // 명령 실행
+        if (execvp(exec_args[0], exec_args) < 0) {
+            perror("execvp"); // 실행 실패 시 에러 출력
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        // 부모 프로세스: 자식 프로세스 종료 대기
+        printf("Executing process: %s\n", rpath);
+        waitpid(pid, &status, 0);
+
+        // 실행 결과 확인
+        if (WIFEXITED(status)) {
+            printf("Process exited with status: %d\n", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            printf("Process terminated by signal: %d\n", WTERMSIG(status));
+        }
+    }
+    return 0;
 }

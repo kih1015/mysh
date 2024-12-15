@@ -17,7 +17,6 @@ int main() {
     struct sockaddr_in address;
     int addrlen = sizeof(address);
     char buffer[BUFFER_SIZE] = {0};
-    char response[BUFFER_SIZE] = {0};
 
     // 소켓 생성
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
@@ -68,24 +67,13 @@ listen:
         buffer[bytesRead] = '\0'; // Null-terminate the string
         printf("Received: %s\n", buffer);
 
-        if (strcmp(buffer, "pwd") == 0) {
-            if (strlen(current_dir) == strlen(chroot_path)) {
-                response[0] = '/'; // for root path
-            } else {
-                sprintf(response, "%s", current_dir + strlen(chroot_path));
-            }
-            send(client_fd, response, strlen(response), 0);
-        } else {
-            execute(buffer);
-        }
-        send_info();
+        execute(buffer);
     
         // 종료 조건
         if (strncmp(buffer, "exit", 4) == 0) {
             printf("Exiting...\n");
             break;
         } 
-        memset(response, 0, sizeof(response));
     }
 
     close(client_fd);
