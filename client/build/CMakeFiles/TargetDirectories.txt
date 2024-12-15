@@ -1,0 +1,5 @@
+/root/mysh/client/build/CMakeFiles/TextStyleFileExplorer.dir
+/root/mysh/client/build/CMakeFiles/edit_cache.dir
+/root/mysh/client/build/CMakeFiles/rebuild_cache.dir
+/root/mysh/client/build/CMakeFiles/TextStyleFileExplorer_autogen_timestamp_deps.dir
+/root/mysh/client/build/CMakeFiles/TextStyleFileExplorer_autogen.dir
