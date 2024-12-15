@@ -41,6 +41,8 @@ private:
     void handleRunProcess();
     void handleKillProcess();
     void handleChangePermission();
+    void handleCreateSoftLink();
+    void handleCreateHardLink();
 };
 
 #endif // TEXT_STYLE_FILE_EXPLORER_H

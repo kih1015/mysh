@@ -109,6 +109,12 @@ bool TextStyleFileExplorer::eventFilter(QObject* obj, QEvent* event) {
         } else if (keyEvent->key() == Qt::Key_F6) { // F6 키 처리
             handleChangePermission(); // chmod
             return true;
+        } else if (keyEvent->key() == Qt::Key_F1) { // 소프트 링크 생성
+            handleCreateSoftLink();
+            return true;
+        } else if (keyEvent->key() == Qt::Key_F3) { // 하드 링크 생성
+            handleCreateHardLink();
+            return true;
         }
     } 
     return QWidget::eventFilter(obj, event);
@@ -620,4 +626,76 @@ void TextStyleFileExplorer::handleChangePermission() {
         fileList->removeItemWidget(editItem);
         delete editItem;
     });
+}
+
+void TextStyleFileExplorer::handleCreateSoftLink() {
+    QListWidgetItem* selectedItem = fileList->currentItem();
+    if (!selectedItem) {
+        qDebug() << "No file selected to create a soft link.";
+        return;
+    }
+
+    QString targetFile = selectedItem->text().split(QRegExp("\\s+")).last(); // 파일/폴더 이름
+    targetFile.remove('\"');
+
+    if (targetFile.isEmpty()) {
+        qDebug() << "Invalid file name.";
+        return;
+    }
+
+    // 사용자에게 소프트 링크 이름 입력받기
+    bool ok;
+    QString linkName = targetFile + ".soft";
+
+    if (ok && !linkName.trimmed().isEmpty()) {
+        // 서버에 소프트 링크 생성 명령 전송
+        QString command = QString("ln -s %1 %2\n").arg(targetFile).arg(linkName.trimmed());
+        if (socket->write(command.toUtf8()) == -1) {
+            qDebug() << "Failed to send soft link command:" << socket->errorString();
+            return;
+        }
+        if (!socket->waitForBytesWritten(3000)) {
+            qDebug() << "Timeout while sending soft link command.";
+            return;
+        }
+
+        qDebug() << "Sent to server: ln -s" << targetFile << linkName;
+        handleRefreshDirectory();
+    }
+}
+
+void TextStyleFileExplorer::handleCreateHardLink() {
+    QListWidgetItem* selectedItem = fileList->currentItem();
+    if (!selectedItem) {
+        qDebug() << "No file selected to create a hard link.";
+        return;
+    }
+
+    QString targetFile = selectedItem->text().split(QRegExp("\\s+")).last(); // 파일/폴더 이름
+    targetFile.remove('\"');
+
+    if (targetFile.isEmpty()) {
+        qDebug() << "Invalid file name.";
+        return;
+    }
+
+    // 사용자에게 하드 링크 이름 입력받기
+    bool ok;
+    QString linkName = targetFile + ".hard";
+
+    if (ok && !linkName.trimmed().isEmpty()) {
+        // 서버에 하드 링크 생성 명령 전송
+        QString command = QString("ln %1 %2\n").arg(targetFile).arg(linkName.trimmed());
+        if (socket->write(command.toUtf8()) == -1) {
+            qDebug() << "Failed to send hard link command:" << socket->errorString();
+            return;
+        }
+        if (!socket->waitForBytesWritten(3000)) {
+            qDebug() << "Timeout while sending hard link command.";
+            return;
+        }
+
+        qDebug() << "Sent to server: ln" << targetFile << linkName;
+        handleRefreshDirectory();
+    }
 }
