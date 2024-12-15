@@ -340,6 +340,7 @@ void TextStyleFileExplorer::handleCopy() {
 
     // 선택된 항목의 이름 추출
     QString itemName = selectedItem->text().split(QRegExp("\\s+")).last(); // 파일/폴더 이름만 추출
+    QString type = selectedItem->text().split(QRegExp("\\s+"))[1];         // 파일/폴더 타입 추출 (DIR/FILE)
 
     QString fullPath;
     // 현재 경로와 결합하여 Full Path 생성
@@ -347,9 +348,11 @@ void TextStyleFileExplorer::handleCopy() {
     else fullPath = currentPathLabel->text() + "/" + itemName;
 
     copiedItem = fullPath; // Full Path 저장
-    qDebug() << "Copied item (full path):" << copiedItem;
-}
 
+    // 폴더인 경우 플래그 설정
+    isDirectory = (type == "DIR");
+    qDebug() << "Copied item (full path):" << copiedItem << ", isDirectory:" << isDirectory;
+}
 
 void TextStyleFileExplorer::handlePaste() {
     if (copiedItem.isEmpty()) {
@@ -364,14 +367,20 @@ void TextStyleFileExplorer::handlePaste() {
     if (currentPathLabel->text() == "/") destinationPath = "/" + newItemName;
     else destinationPath = currentPathLabel->text() + "/" + newItemName;
 
+    // 폴더인 경우 -r 옵션 추가
+    QString command;
+    if (isDirectory) {
+        command = QString("cp -r %1 %2").arg(copiedItem, destinationPath);
+    } else {
+        command = QString("cp %1 %2").arg(copiedItem, destinationPath);
+    }
+
     // 서버에 cp 명령 전송
-    QString command = QString("cp %1 %2").arg(copiedItem, destinationPath);
     if (socket->write(command.toUtf8()) == -1) {
         qDebug() << "Failed to send cp command:" << socket->errorString();
-    } else if (!socket->waitForBytesWritten(3000)) {
+    } else if (!socket->waitForReadyRead(3000)) {
         qDebug() << "Timeout while sending cp command.";
     } else {
-        qDebug() << "Sent to server: cp" << copiedItem << destinationPath;
+        qDebug() << "Sent to server:" << command;
     }
 }
-

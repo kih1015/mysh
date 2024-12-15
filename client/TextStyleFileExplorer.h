@@ -26,6 +26,7 @@ private:
     QLineEdit* commandInput;
     QTcpSocket* socket;
     QString copiedItem;
+    bool isDirectory;
 
     void moveSelection(int step);
     void handleEnter();

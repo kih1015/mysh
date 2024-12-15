@@ -645,6 +645,50 @@ out:
     return ret;
 }
 
+// int cmd_cp(int argc, char **argv)
+// {
+//     int ret = 0;
+//     char rpath1[128];
+//     char rpath2[128];
+//     FILE *src, *dst;
+//     char buf[256];
+//     size_t nread;
+
+//     if (argc != 3) {
+//         ret = -2; // syntax error
+//         goto out;
+//     }
+
+//     get_realpath(argv[1], rpath1);
+//     get_realpath(argv[2], rpath2);
+
+//     src = fopen(rpath1, "rb");
+//     if (src == NULL) {
+//         perror(argv[0]);
+//         ret = -1;
+//         goto out;
+//     }
+
+//     dst = fopen(rpath2, "wb");
+//     if (dst == NULL) {
+//         perror(argv[0]);
+//         fclose(src);
+//         ret = -1;
+//         goto out;
+//     }
+
+//     while ((nread = fread(buf, 1, sizeof(buf), src)) > 0) {
+//         fwrite(buf, 1, nread, dst);
+//     }
+
+//     fclose(src);
+//     fclose(dst);
+//     printf("file copied: %s -> %s\n", argv[1], argv[2]);
+
+// out:
+//     return ret;
+// }
+
 int cmd_cp(int argc, char **argv)
 {
     int ret = 0;
@@ -654,6 +698,15 @@ int cmd_cp(int argc, char **argv)
     char buf[256];
     size_t nread;
 
+    int recursive = 0;
+
+    // Check for -r option
+    if (argc >= 2 && strcmp(argv[1], "-r") == 0) {
+        recursive = 1;
+        argv++; // Shift arguments
+        argc--;
+    }
+
     if (argc != 3) {
         ret = -2; // syntax error
         goto out;
@@ -662,32 +715,78 @@ int cmd_cp(int argc, char **argv)
     get_realpath(argv[1], rpath1);
     get_realpath(argv[2], rpath2);
 
-    src = fopen(rpath1, "rb");
-    if (src == NULL) {
+    struct stat statbuf;
+    if (stat(rpath1, &statbuf) < 0) {
         perror(argv[0]);
         ret = -1;
         goto out;
     }
 
-    dst = fopen(rpath2, "wb");
-    if (dst == NULL) {
-        perror(argv[0]);
+    if (S_ISDIR(statbuf.st_mode)) {
+        if (!recursive) {
+            fprintf(stderr, "%s: %s is a directory (use -r to copy recursively)\n", argv[0], argv[1]);
+            ret = -1;
+            goto out;
+        }
+
+        // Create target directory
+        mkdir(rpath2, statbuf.st_mode);
+
+        DIR *dir = opendir(rpath1);
+        if (dir == NULL) {
+            perror(argv[0]);
+            ret = -1;
+            goto out;
+        }
+
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL) {
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+
+            char src_path[256];
+            char dst_path[256];
+            snprintf(src_path, sizeof(src_path), "%s/%s", rpath1, entry->d_name);
+            snprintf(dst_path, sizeof(dst_path), "%s/%s", rpath2, entry->d_name);
+
+            char *new_argv[] = {argv[0], "-r", src_path, dst_path};
+            if (cmd_cp(4, new_argv) != 0) {
+                ret = -1;
+                break;
+            }
+        }
+
+        closedir(dir);
+    } else {
+        // Copy single file
+        src = fopen(rpath1, "rb");
+        if (src == NULL) {
+            perror(argv[0]);
+            ret = -1;
+            goto out;
+        }
+
+        dst = fopen(rpath2, "wb");
+        if (dst == NULL) {
+            perror(argv[0]);
+            fclose(src);
+            ret = -1;
+            goto out;
+        }
+
+        while ((nread = fread(buf, 1, sizeof(buf), src)) > 0) {
+            fwrite(buf, 1, nread, dst);
+        }
+
         fclose(src);
-        ret = -1;
-        goto out;
+        fclose(dst);
+        printf("file copied: %s -> %s\n", argv[1], argv[2]);
     }
-
-    while ((nread = fread(buf, 1, sizeof(buf), src)) > 0) {
-        fwrite(buf, 1, nread, dst);
-    }
-
-    fclose(src);
-    fclose(dst);
-    printf("file copied: %s -> %s\n", argv[1], argv[2]);
 
 out:
     return ret;
 }
+
 
 int cmd_ps(int argc, char **argv)
 {
