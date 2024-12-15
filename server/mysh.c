@@ -657,6 +657,7 @@ int cmd_cat(int argc, char **argv)
         perror("Memory allocation failed");
         ret = -1;
         fclose(fp);
+        send(client_fd, "error", 5, 0);
         goto out;
     }
     fread(fileContent, 1, fileSize, fp);
@@ -674,6 +675,7 @@ int cmd_cat(int argc, char **argv)
         perror("Memory allocation failed");
         free(fileContent);
         ret = -1;
+        send(client_fd, "error", 5, 0);
         goto out;
     }
     snprintf(response, totalSize + 1, "%s%s", header, fileContent);
@@ -856,58 +858,27 @@ int cmd_ps(int argc, char **argv)
     return 0;
 }
 
-
-// int cmd_ps(int argc, char **argv)
-// {
-//     DIR *dir;
-//     struct dirent *entry;
-//     char path[256];
-//     char cmdline[256];
-//     FILE *fp;
-    
-//     printf("%5s %5s %s\n", "PID", "PPID", "CMD");
-    
-//     dir = opendir("/proc");
-//     if (!dir) {
-//         perror("opendir");
-//         return -1;
-//     }
-    
-//     while ((entry = readdir(dir)) != NULL) {
-//         // PID 디렉토리만 처리 (숫자로 된 이름)
-//         if (entry->d_type == DT_DIR && entry->d_name[0] >= '0' && entry->d_name[0] <= '9') {
-//             int pid = atoi(entry->d_name);
-//             int ppid = 0;
-            
-//             // /proc/[pid]/stat 읽기
-//             snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-//             fp = fopen(path, "r");
-//             if (fp) {
-//                 fscanf(fp, "%*d %s %*c %d", cmdline, &ppid);
-//                 fclose(fp);
-                
-//                 // 대괄호 제거
-//                 cmdline[strlen(cmdline)-1] = '\0';
-//                 printf("%5d %5d %s\n", pid, ppid, cmdline+1);
-//             }
-//         }
-//     }
-//     closedir(dir);
-//     return 0;
-// }
-
 int cmd_kill(int argc, char **argv)
 {
     if (argc != 2) {
+        fprintf(stderr, "Usage: kill <pid>\n");
         return -2;  // 문법 오류
     }
-    
+
+    // argv[1]이 숫자인지 확인
+    for (size_t i = 0; i < strlen(argv[1]); i++) {
+        if (!isdigit(argv[1][i])) {
+            fprintf(stderr, "Error: Invalid PID. Argument must be a numeric value.\n");
+            return -2;  // 숫자가 아니면 문법 오류 반환
+        }
+    }
+
     pid_t pid = atoi(argv[1]);
     if (kill(pid, SIGTERM) < 0) {
-        perror(argv[0]);
-        return -1;
+        perror("kill");
+        return -1;  // 종료 실패
     }
-    
+
     printf("Signal sent to process %d\n", pid);
     return 0;
 }

@@ -21,6 +21,7 @@ protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
 
 private:
+    QLabel* commandHelpLabel;
     QLabel* currentPathLabel;
     QListWidget* fileList;
     QLineEdit* commandInput;
@@ -43,6 +44,7 @@ private:
     void handleChangePermission();
     void handleCreateSoftLink();
     void handleCreateHardLink();
+    void handleGoToRootDirectory();
 };
 
 #endif // TEXT_STYLE_FILE_EXPLORER_H

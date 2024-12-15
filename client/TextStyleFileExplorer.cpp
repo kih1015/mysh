@@ -12,14 +12,24 @@
 #include <QHostAddress>
 #include <QDebug>
 #include <QPushButton>
+#include <QDateTime>
 
 TextStyleFileExplorer::TextStyleFileExplorer(QWidget* parent) : QWidget(parent) {
     QVBoxLayout* mainLayout = new QVBoxLayout(this);
 
+    // 현재 경로 레이블 (Working Directory 포함)
+    QVBoxLayout* pathLayout = new QVBoxLayout();
+    QLabel* workingDirLabel = new QLabel("Working Directory: ", this);
+    workingDirLabel->setStyleSheet("font-weight: bold; font-size: 14px;");
     currentPathLabel = new QLabel("/", this);
-    currentPathLabel->setAlignment(Qt::AlignCenter);
-    currentPathLabel->setStyleSheet("font-weight: bold;");
+    currentPathLabel->setAlignment(Qt::AlignLeft);
+    currentPathLabel->setStyleSheet("font-size: 14px;");
 
+    pathLayout->addWidget(workingDirLabel);
+    pathLayout->addWidget(currentPathLabel);
+    mainLayout->addLayout(pathLayout);
+
+    // 파일 리스트
     fileList = new QListWidget(this);
     fileList->setFocusPolicy(Qt::StrongFocus);
 
@@ -31,12 +41,39 @@ TextStyleFileExplorer::TextStyleFileExplorer(QWidget* parent) : QWidget(parent) 
     mainLayout->addWidget(currentPathLabel);
     mainLayout->addWidget(fileList);
 
-    setWindowTitle("Text-Style File Explorer");
-    setFixedSize(600, 400);
+    // 명령어 박스 추가
+    QFrame* commandBox = new QFrame(this);
+    commandBox->setFrameShape(QFrame::Box);
+    commandBox->setFrameShadow(QFrame::Raised);
+    commandBox->setStyleSheet("background-color: #f0f0f0; border: 2px solid #d0d0d0;");
 
+    QVBoxLayout* commandBoxLayout = new QVBoxLayout(commandBox);
+    QLabel* commandTitle = new QLabel("Commands", commandBox);
+    commandTitle->setStyleSheet("font-size: 12pt; font-weight: bold; color: black;");
+    commandTitle->setAlignment(Qt::AlignCenter);
+
+    QLabel* commandDetails = new QLabel(commandBox);
+    commandDetails->setStyleSheet("font-size: 10pt; color: #333333;");
+    commandDetails->setAlignment(Qt::AlignLeft);
+    commandDetails->setText(
+        "[Ctrl+C: Copy]    [Ctrl+V: Paste]    [F1: Create Folder]    [F2: Create File]\n"
+        "[F3: Change Permission]    [F4: Run Process]    [F5: Show Process List]\n"
+        "[F6: Soft Link]    [F7: Hard Link]    [Del: Delete]    [Home: Go to Root]\n"
+        "[ESC: Refresh Directory]    [End: Kill Process]    [Enter: Change Directory or Open File]" 
+    );
+
+    commandBoxLayout->addWidget(commandTitle);
+    commandBoxLayout->addWidget(commandDetails);
+    mainLayout->addWidget(commandBox);
+
+    // 기본 창 설정
+    setWindowTitle("Text-Style File Explorer");
+    setFixedSize(620, 500); // 명령어 박스 추가로 창 크기 조정
+
+    // 이벤트 필터 설정
     fileList->installEventFilter(this);
 
-    // Setup TCP socket
+    // TCP 소켓 설정
     socket = new QTcpSocket(this);
     socket->connectToHost(QHostAddress("127.0.0.1"), 8080);
     connect(socket, &QTcpSocket::readyRead, this, &TextStyleFileExplorer::onServerResponse);
@@ -88,32 +125,35 @@ bool TextStyleFileExplorer::eventFilter(QObject* obj, QEvent* event) {
         } else if (keyEvent->key() == Qt::Key_Delete) {
             handleDelete(); // rm
             return true;
-        } else if (keyEvent->key() == Qt::Key_F7) {
+        } else if (keyEvent->key() == Qt::Key_F1) {
             handleCreateFolder(); // mkdir
             return true;
-        } else if (keyEvent->key() == Qt::Key_F8) {
+        } else if (keyEvent->key() == Qt::Key_F2) {
             handleCreateFile(); // touch
             return true;
         } else if (keyEvent->key() == Qt::Key_Escape) { // ESC 키 처리
             handleRefreshDirectory(); // ls 명령 실행
             return true;
-        } else if (keyEvent->key() == Qt::Key_F2) { // F2 키 처리
+        } else if (keyEvent->key() == Qt::Key_F5) {
             handleShowProcessList(); // ps
             return true;
-        } else if (keyEvent->key() == Qt::Key_F4) { // F4 키 처리
+        } else if (keyEvent->key() == Qt::Key_F4) {
             handleRunProcess(); // exec
             return true;
         } else if (keyEvent->key() == Qt::Key_End) { // End 키 처리
             handleKillProcess(); // kill
             return true;
-        } else if (keyEvent->key() == Qt::Key_F6) { // F6 키 처리
+        } else if (keyEvent->key() == Qt::Key_F3) { // F6 키 처리
             handleChangePermission(); // chmod
             return true;
-        } else if (keyEvent->key() == Qt::Key_F1) { // 소프트 링크 생성
+        } else if (keyEvent->key() == Qt::Key_F6) { // 소프트 링크 생성
             handleCreateSoftLink();
             return true;
-        } else if (keyEvent->key() == Qt::Key_F3) { // 하드 링크 생성
+        } else if (keyEvent->key() == Qt::Key_F7) { // 하드 링크 생성
             handleCreateHardLink();
+            return true;
+        } else if (keyEvent->key() == Qt::Key_Home) { // Home 키 처리
+            handleGoToRootDirectory();
             return true;
         }
     } 
@@ -241,34 +281,62 @@ void TextStyleFileExplorer::onServerResponse() {
         // 기존 파일 리스트 지우기
         fileList->clear();
 
-        // 새 파일 리스트 생성
+        // 이름순 정렬을 위한 리스트 생성
+        QList<QPair<QString, QString>> sortedList;
+
         for (const QString& entry : fileListData) {
             QStringList fields = entry.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
             if (fields.size() >= 9) {
                 QString permissions = fields[1];          // 권한
-                QString type = fields[2]; // 폴더/파일 구분
-                QString creationTime = fields[5];        // 생성 시간
-                QString modificationTime = fields[6];    // 수정 시간
-                QString size = fields[9];               // 파일 크기
-                QString name = fields[10];               // 파일 이름
+                QString type = fields[2];                 // 폴더/파일 구분
+                qint64 modificationTimeSec = fields[6].toLongLong(); // 수정 시간 (초 단위)
+                QString size = fields[9];                 // 파일 크기
+                QString name = fields[10];                // 파일 이름
+
+                // 초 단위를 yyyy-MM-dd hh:mm 형식으로 변환
+                QString modificationTime = QDateTime::fromSecsSinceEpoch(modificationTimeSec)
+                                            .toString("yyyy-MM-dd hh:mm");
 
                 // 폴더/파일 정보를 한 줄로 표시
-                QString displayEntry = QString("%1 %2 %3 %4 %5 %6")
-                                       .arg(permissions, -10)
-                                       .arg(type, -5)
-                                       .arg(creationTime, -15)
-                                       .arg(modificationTime, -15)
-                                       .arg(size, -8)
-                                       .arg(name);
+                QString displayEntry = QString("%1 %2 %3 %4 %5")
+                                        .arg(permissions, -10)
+                                        .arg(type, -5)
+                                        .arg(modificationTime, -15)
+                                        .arg(size, -8)
+                                        .arg(name);
 
-                fileList->addItem(displayEntry); // 항목 추가
+                // 이름과 디스플레이 엔트리를 페어로 추가
+                sortedList.append(qMakePair(name, displayEntry));
             }
+        }
+
+        // 이름순 정렬 (폴더 우선, 이름순 정렬)
+        std::sort(sortedList.begin(), sortedList.end(), [](const QPair<QString, QString>& a, const QPair<QString, QString>& b) {
+            // 첫 번째 요소가 DIR인지 확인
+            bool isDirA = a.second.contains("DIR");
+            bool isDirB = b.second.contains("DIR");
+
+            // 폴더는 먼저 오도록 정렬
+            if (isDirA && !isDirB) {
+                return true; // a가 폴더고 b는 폴더가 아니면 a가 먼저
+            } else if (!isDirA && isDirB) {
+                return false; // b가 폴더고 a는 폴더가 아니면 b가 먼저
+            }
+
+            // 둘 다 폴더이거나 둘 다 파일이면 이름순으로 정렬
+            return a.first < b.first;
+        });
+
+        // 정렬된 리스트를 QListWidget에 추가
+        for (const auto& pair : sortedList) {
+            fileList->addItem(pair.second); // 정렬된 항목 추가
         }
 
         fileList->setStyleSheet("");
         fileList->update();
 
-        qDebug() << "Updated file list with detailed information.";
+        qDebug() << "Updated file list with detailed information (sorted by name).";
+
     }
 }
 
@@ -698,4 +766,22 @@ void TextStyleFileExplorer::handleCreateHardLink() {
         qDebug() << "Sent to server: ln" << targetFile << linkName;
         handleRefreshDirectory();
     }
+}
+
+void TextStyleFileExplorer::handleGoToRootDirectory() {
+    QString command = "cd /\n";
+
+    // 서버에 cd / 명령 전송
+    if (socket->write(command.toUtf8()) == -1) {
+        qDebug() << "Failed to send cd / command:" << socket->errorString();
+        return;
+    }
+
+    if (!socket->waitForReadyRead(3000)) {
+        qDebug() << "Timeout while sending cd / command.";
+        return;
+    }
+
+    qDebug() << "Sent to server: cd /";
+    handleRefreshDirectory();
 }
